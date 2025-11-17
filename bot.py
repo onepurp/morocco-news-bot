@@ -36,20 +36,20 @@ def admin_only(func):
 
 # --- You.com API Integration ---
 async def fetch_moroccan_news():
-    """Fetches Moroccan news from the You.com API."""
+    """Fetches Moroccan news from the You.com API using the Chat endpoint."""
     headers = {"X-API-Key": YOU_API_KEY}
-    params = {
-        "q": "أخبار المغرب",
-        "count": 8,
-        "country": "MA",
+    # --- FIX: The API requires a POST request with a JSON payload ---
+    payload = {
+        "query": "أخبار المغرب اليوم",
+        "country": "MA"
     }
     try:
-        # --- FIX: Corrected the API endpoint URL from /v1/news to /api/news ---
-        response = requests.get("https://api.you.com/api/news", headers=headers, params=params)
+        # --- FIX: Changed to POST and updated the URL to the correct Chat API endpoint ---
+        response = requests.post("https://api.you.com/v1/chat", headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()
-        # --- FIX: Correctly parse the nested JSON response from the API ---
-        return data.get("news", {}).get("results", [])
+        # --- FIX: The news results are in the "searchResults" key ---
+        return data.get("searchResults", {}).get("results", [])
     except requests.exceptions.RequestException as e:
         logger.error(f"Error fetching news from You.com API: {e}")
         return None
@@ -63,8 +63,7 @@ def format_news(news_items):
     formatted_news = " إليك أهم الأخبار المغربية لهذا اليوم:\n\n"
     for item in news_items:
         title = item.get("title", "No Title")
-        # The API uses 'description' for the snippet
-        snippet = item.get("description", "No Snippet")
+        snippet = item.get("snippet", "No Snippet")
         url = item.get("url", "#")
         formatted_news += f"📰 *{title}*\n"
         formatted_news += f"{snippet}\n"
