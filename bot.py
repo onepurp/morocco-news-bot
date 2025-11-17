@@ -44,6 +44,9 @@ async def fetch_moroccan_news():
         "country": "MA",
     }
     try:
+        # Using a synchronous library in an async function is not ideal,
+        # but for this simple case, it's acceptable.
+        # For high-concurrency bots, use an async HTTP library like httpx.
         response = requests.get("https://api.you.com/v1/news", headers=headers, params=params)
         response.raise_for_status()
         data = response.json()
@@ -87,24 +90,12 @@ async def daily_news_job(context: Application):
     logger.info("Running daily news job...")
     news_items = await fetch_moroccan_news()
     formatted_news = format_news(news_items)
-    # The 'context' object passed here is the 'application' object from main()
     await context.bot.send_message(chat_id=ADMIN_USER_ID, text=formatted_news, parse_mode="Markdown")
 
-# --- Main Application ---
-async def main():
-    """Starts the bot."""
-    # --- Scheduler ---
+# --- Scheduler Setup (to be called by the bot application) ---
+async def setup_scheduler(application: Application):
+    """Initializes and starts the scheduler."""
     scheduler = AsyncIOScheduler()
-    scheduler.start()
-
-    # --- Bot Application ---
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-    # --- Command Handlers ---
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("getnews", get_news))
-
-    # --- Add scheduled job ---
     scheduler.add_job(
         daily_news_job,
         "cron",
@@ -112,11 +103,29 @@ async def main():
         minute=int(SCHEDULE_TIME.split(':')[1]),
         kwargs={"context": application}
     )
+    scheduler.start()
+    logger.info("Scheduler started and job added.")
+
+# --- Main Application ---
+def main():
+    """Starts the bot."""
+    # The Application object will manage the asyncio event loop.
+    # We pass our setup_scheduler coroutine to post_init.
+    application = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .post_init(setup_scheduler)
+        .build()
+    )
+
+    # --- Command Handlers ---
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("getnews", get_news))
 
     # --- Start the Bot ---
-    # This will run the bot indefinitely until it is stopped.
-    await application.run_polling()
+    # run_polling() is a blocking call that starts the event loop,
+    # runs post_init, and then starts polling for updates.
+    application.run_polling()
 
 if __name__ == "__main__":
-    # This creates an asyncio event loop and runs the main coroutine.
-    asyncio.run(main())
+    main()
