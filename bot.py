@@ -44,13 +44,12 @@ async def fetch_moroccan_news():
         "country": "MA",
     }
     try:
-        # Using a synchronous library in an async function is not ideal,
-        # but for this simple case, it's acceptable.
-        # For high-concurrency bots, use an async HTTP library like httpx.
-        response = requests.get("https://api.you.com/v1/news", headers=headers, params=params)
+        # --- FIX: Corrected the API endpoint URL ---
+        response = requests.get("https://api.you.com/api/news", headers=headers, params=params)
         response.raise_for_status()
         data = response.json()
-        return data.get("hits", [])
+        # The You.com News API nests results inside a 'news' object
+        return data.get("news", {}).get("results", [])
     except requests.exceptions.RequestException as e:
         logger.error(f"Error fetching news from You.com API: {e}")
         return None
@@ -64,7 +63,9 @@ def format_news(news_items):
     formatted_news = " إليك أهم الأخبار المغربية لهذا اليوم:\n\n"
     for item in news_items:
         title = item.get("title", "No Title")
-        snippet = item.get("snippet", "No Snippet")
+        # The API uses 'description' for the snippet
+        snippet = item.get("description", "No Snippet")
+        # The API uses 'url' for the link
         url = item.get("url", "#")
         formatted_news += f"📰 *{title}*\n"
         formatted_news += f"{snippet}\n"
@@ -92,7 +93,7 @@ async def daily_news_job(context: Application):
     formatted_news = format_news(news_items)
     await context.bot.send_message(chat_id=ADMIN_USER_ID, text=formatted_news, parse_mode="Markdown")
 
-# --- Scheduler Setup (to be called by the bot application) ---
+# --- Scheduler Setup ---
 async def setup_scheduler(application: Application):
     """Initializes and starts the scheduler."""
     scheduler = AsyncIOScheduler()
@@ -109,8 +110,6 @@ async def setup_scheduler(application: Application):
 # --- Main Application ---
 def main():
     """Starts the bot."""
-    # The Application object will manage the asyncio event loop.
-    # We pass our setup_scheduler coroutine to post_init.
     application = (
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
@@ -123,8 +122,6 @@ def main():
     application.add_handler(CommandHandler("getnews", get_news))
 
     # --- Start the Bot ---
-    # run_polling() is a blocking call that starts the event loop,
-    # runs post_init, and then starts polling for updates.
     application.run_polling()
 
 if __name__ == "__main__":
