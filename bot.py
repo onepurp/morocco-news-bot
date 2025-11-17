@@ -86,6 +86,7 @@ async def daily_news_job(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Running daily news job...")
     news_items = await fetch_moroccan_news()
     formatted_news = format_news(news_items)
+    # The 'context' object passed here is the 'application' object from main()
     await context.bot.send_message(chat_id=ADMIN_USER_ID, text=formatted_news, parse_mode="Markdown")
 
 # --- Main Application ---
@@ -99,7 +100,17 @@ def main():
 
     # --- Scheduler ---
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(daily_news_job, "cron", hour=int(SCHEDULE_TIME.split(':')[0]), minute=int(SCHEDULE_TIME.split(':')[1]), context=application)
+    
+    # --- FIX ---
+    # The 'context' argument for daily_news_job is passed via kwargs.
+    # This prevents it from being misinterpreted as a trigger argument.
+    scheduler.add_job(
+        daily_news_job,
+        "cron",
+        hour=int(SCHEDULE_TIME.split(':')[0]),
+        minute=int(SCHEDULE_TIME.split(':')[1]),
+        kwargs={"context": application}
+    )
     scheduler.start()
 
     # --- Start the Bot ---
