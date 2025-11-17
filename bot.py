@@ -1,161 +1,98 @@
-import asyncio, logging, os, sqlite3, requests
-from datetime import datetime, timedelta
+import os
+import requests
+import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+from dotenv import load_dotenv
+import asyncio
 
-# ──────────────────────────────────────────────────────────────
-# Configuration
-RATE_LIMIT_HOURS = 24
-DB_FILENAME = 'users.db'
+# Load environment variables from .env file
+load_dotenv()
 
-# STRIP whitespace
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '').strip()
-YOU_API_KEY = os.getenv('YOU_API_KEY', '').strip()
-ADMIN_ID = os.getenv('ADMIN_ID', '').strip()
+# --- Configuration ---
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+TELEGRAM_ADMIN_ID = int(os.getenv("TELEGRAM_ADMIN_ID"))
 
-logging.basicConfig(level=logging.INFO)
+# --- Logging Setup ---
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────
-# Database
-def init_db():
-    conn = sqlite3.connect(DB_FILENAME)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users 
-                 (user_id TEXT PRIMARY KEY, last_request TIMESTAMP)''')
-    conn.commit()
-    conn.close()
+# --- News Fetching and Processing ---
+def get_moroccan_news():
+    """Fetches and processes news from the NewsData.io API."""
+    url = f"https://newsdata.io/api/1/news?apikey={NEWS_API_KEY}&country=ma&language=ar"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Raise an exception for bad status codes
+        data = response.json()
 
-def check_limit(user_id: str):
-    if ADMIN_ID and user_id == ADMIN_ID:
-        return True, ""
-    
-    conn = sqlite3.connect(DB_FILENAME)
-    c = conn.cursor()
-    c.execute("SELECT last_request FROM users WHERE user_id = ?", (user_id,))
-    result = c.fetchone()
-    conn.close()
-    
-    if not result:
-        return True, ""
-    
-    last_req = datetime.fromisoformat(result[0])
-    next_allowed = last_req + timedelta(hours=RATE_LIMIT_HOURS)
-    
-    if datetime.now() >= next_allowed:
-        return True, ""
-    
-    remaining = next_allowed - datetime.now()
-    hours = remaining.seconds // 3600
-    minutes = (remaining.seconds % 3600) // 60
-    return False, f"⏳ انتظر {hours} ساعة و {minutes} دقيقة"
+        if data.get("status") == "success":
+            articles = data.get("results", [])
+            return articles
+        else:
+            logger.error(f"News API returned an error: {data.get('message')}")
+            return None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching news: {e}")
+        return None
 
-def set_limit(user_id: str):
-    if ADMIN_ID and user_id == ADMIN_ID:
-        return
+def format_news(articles):
+    """Formats a list of articles into a concise summary."""
+    if not articles:
+        return "لم يتم العثور على أخبار جديدة في الوقت الحالي."
+
+    summary = "📰 **موجز الأخبار اليومي من المغرب**\n\n"
+    for article in articles[:7]:  # Limit to the top 7 articles for brevity
+        title = article.get("title", "لا يوجد عنوان")
+        link = article.get("link", "#")
+        summary += f"🔹 [{title}]({link})\n"
     
-    conn = sqlite3.connect(DB_FILENAME)
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO users VALUES (?, ?)", 
-              (user_id, datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
+    summary += "\n*يمكنك قراءة المزيد بالضغط على العناوين.*"
+    return summary
 
-# ──────────────────────────────────────────────────────────────
-# News Fetcher
-class NewsFetcher:
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-    
-    def fetch(self):
-        try:
-            resp = requests.get(
-                "https://api.ydc-index.io/v1/search",
-                headers={"X-API-Key": self.api_key},
-                params={"query": "أخبار المغرب", "count": 10, "freshness": "day"},
-                timeout=30
-            )
-            resp.raise_for_status()
-            
-            data = resp.json()
-            items = data.get("results", {}).get("news", []) or data.get("results", {}).get("web", [])
-            
-            filtered = []
-            for item in items:
-                title = item.get("title", "")
-                if any(kw in title.lower() for kw in ["مغرب", "maroc"]):
-                    filtered.append({
-                        "title": title,
-                        "desc": item.get("description", "")[:150] + "...",
-                        "url": item.get("url", ""),
-                        "source": item.get("source_name", "مصادر"),
-                    })
-            return filtered[:5]
-            
-        except Exception as e:
-            logger.error(f"❌ API Error: {e}")
-            return []
-
-    def format(self, items):
-        if not items:
-            return "📰 لا توجد أخبار.\n\n💡 تحقق من API Key في Railway Variables"
-        
-        msg = f"📰 *أخبار المغرب - {datetime.now().strftime('%Y-%m-%d')}*\n\n"
-        for i, item in enumerate(items, 1):
-            msg += f"*{i}. {item['title']}*\n📝 {item['desc']}\n🔗 [اقرأ]({item['url']})\n📍 {item['source']}\n\n"
-        return msg.strip()
-
-# ──────────────────────────────────────────────────────────────
-# Commands
+# --- Telegram Bot Commands ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    is_admin = " (مدير)" if ADMIN_ID and str(update.effective_user.id) == ADMIN_ID else ""
-    await update.message.reply_text(
-        f"👋 *أهلاً{is_admin}*\n\n/news - الأخبار\n/status - الحالة",
-        parse_mode='Markdown'
-    )
+    """Handler for the /start command."""
+    await update.message.reply_text("أهلاً بك في بوت أخبار المغرب! سأرسل لك موجزاً يومياً. للحصول على الأخبار الآن، استخدم الأمر /news.")
 
-async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    
-    allowed, msg = check_limit(user_id)
-    if not allowed:
-        await update.message.reply_text(msg)
-        return
-    
-    await update.message.reply_text("⏳ جاري جلب الأخبار...")
-    
-    fetcher = NewsFetcher(YOU_API_KEY)
-    items = fetcher.fetch()
-    
-    await update.message.reply_text(
-        fetcher.format(items),
-        parse_mode='Markdown',
-        disable_web_page_preview=True
-    )
-    
-    set_limit(user_id)
+async def get_news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for the /news command (admin only)."""
+    if update.message.from_user.id == TELEGRAM_ADMIN_ID:
+        await send_daily_news(context)
+    else:
+        await update.message.reply_text("عذراً، هذا الأمر مخصص للمسؤول فقط.")
 
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    allowed, msg = check_limit(user_id)
-    await update.message.reply_text("✅ متاح!" if allowed else msg)
+# --- Automated News Delivery ---
+async def send_daily_news(context: ContextTypes.DEFAULT_TYPE):
+    """Fetches and sends the daily news summary."""
+    chat_id = TELEGRAM_ADMIN_ID
+    articles = get_moroccan_news()
+    if articles:
+        formatted_message = format_news(articles)
+        await context.bot.send_message(chat_id=chat_id, text=formatted_message, parse_mode='Markdown')
+    else:
+        await context.bot.send_message(chat_id=chat_id, text="حدث خطأ أثناء جلب الأخبار. يرجى المحاولة مرة أخرى لاحقاً.")
 
-# ──────────────────────────────────────────────────────────────
-# Main
 def main():
-    if not TELEGRAM_TOKEN or not YOU_API_KEY:
-        logger.error("❌ Missing tokens!")
-        return
-    
-    init_db()
-    logger.info("🚀 Bot starting...")
-    
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("news", news))
-    app.add_handler(CommandHandler("status", status))
-    
-    app.run_polling()
+    """Starts the Telegram bot and schedules the daily news."""
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # --- Command Handlers ---
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("news", get_news_command))
+
+    # --- Daily Scheduling ---
+    job_queue = application.job_queue
+    # Schedule to run daily at 08:00 Morocco time (adjust as needed)
+    job_queue.run_daily(send_daily_news, time=time(hour=8, minute=0))
+
+    # --- Start the Bot ---
+    application.run_polling()
 
 if __name__ == '__main__':
+    from datetime import time
     main()
