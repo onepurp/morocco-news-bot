@@ -9,6 +9,7 @@ RATE_LIMIT_HOURS = 24
 DB_FILENAME = 'users.db'
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 YOU_API_KEY = os.getenv('YOU_API_KEY')
+ADMIN_ID = os.getenv('ADMIN_ID')  # Your Telegram user ID (numeric)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,6 +31,10 @@ def init_db():
 
 def check_limit(user_id: str) -> tuple[bool, str]:
     """Check rate limit: Returns (allowed, message)"""
+    # 🎯 Admin bypass - no limits
+    if ADMIN_ID and user_id == ADMIN_ID:
+        return True, ""
+    
     try:
         conn = sqlite3.connect(DB_FILENAME)
         c = conn.cursor()
@@ -59,6 +64,10 @@ def check_limit(user_id: str) -> tuple[bool, str]:
 
 def set_limit(user_id: str):
     """Update user's last request timestamp"""
+    # 🎯 Don't update limit for admin
+    if ADMIN_ID and user_id == ADMIN_ID:
+        return
+    
     try:
         conn = sqlite3.connect(DB_FILENAME)
         c = conn.cursor()
@@ -117,8 +126,11 @@ class NewsFetcher:
 # ──────────────────────────────────────────────────────────────
 # Commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    is_admin = " (أنت المدير!)" if ADMIN_ID and user_id == ADMIN_ID else ""
+    
     await update.message.reply_text(
-        f"👋 *أهلاً!*\n\n📊 مرة واحدة كل {RATE_LIMIT_HOURS} ساعة.\n\n"
+        f"👋 *أهلاً!{is_admin}*\n\n📊 مرة واحدة كل {RATE_LIMIT_HOURS} ساعة.\n\n"
         "/news - 📰 الأخبار\n/status - ⏰ الانتظار",
         parse_mode='Markdown'
     )
