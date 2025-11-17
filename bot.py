@@ -44,11 +44,11 @@ async def fetch_moroccan_news():
         "country": "MA",
     }
     try:
-        # --- FIX: Corrected the API endpoint URL ---
+        # --- FIX: Corrected the API endpoint URL from /v1/news to /api/news ---
         response = requests.get("https://api.you.com/api/news", headers=headers, params=params)
         response.raise_for_status()
         data = response.json()
-        # The You.com News API nests results inside a 'news' object
+        # --- FIX: Correctly parse the nested JSON response from the API ---
         return data.get("news", {}).get("results", [])
     except requests.exceptions.RequestException as e:
         logger.error(f"Error fetching news from You.com API: {e}")
@@ -65,7 +65,6 @@ def format_news(news_items):
         title = item.get("title", "No Title")
         # The API uses 'description' for the snippet
         snippet = item.get("description", "No Snippet")
-        # The API uses 'url' for the link
         url = item.get("url", "#")
         formatted_news += f"📰 *{title}*\n"
         formatted_news += f"{snippet}\n"
