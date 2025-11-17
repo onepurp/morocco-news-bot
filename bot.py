@@ -1,6 +1,5 @@
-import asyncio, os, logging, json, sqlite3, requests
+import asyncio, logging, os, sqlite3, requests
 from datetime import datetime, timedelta
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -21,7 +20,7 @@ def init_db():
     try:
         conn = sqlite3.connect(DB_FILENAME)
         c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS users
+        c.execute('''CREATE TABLE IF NOT EXISTS users 
                      (user_id TEXT PRIMARY KEY, last_request TIMESTAMP)''')
         conn.commit()
         conn.close()
@@ -153,61 +152,21 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ يمكنك الآن!" if allowed else msg)
 
 # ──────────────────────────────────────────────────────────────
-# Webhook Server
-class WebhookHandler(BaseHTTPRequestHandler):
-    def log_message(self, format, *args):
-        logger.info(f"{self.address_string()} - {format%args}")
-
-    def do_GET(self):
-        # Railway health check - MUST return 200 on /
-        if self.path == '/':
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b'OK')
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def do_POST(self):
-        # Telegram webhook endpoint
-        if self.path == '/webhook':
-            try:
-                length = int(self.headers['Content-Length'])
-                data = json.loads(self.rfile.read(length))
-                
-                async def process():
-                    application = Application.builder().token(TELEGRAM_TOKEN).build()
-                    application.add_handler(CommandHandler("start", start))
-                    application.add_handler(CommandHandler("news", news))
-                    application.add_handler(CommandHandler("status", status))
-                    await application.initialize()
-                    update = Update.de_json(data, application.bot)
-                    await application.process_update(update)
-                    await application.shutdown()
-                
-                asyncio.run(process())
-                
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(b'OK')
-            except Exception as e:
-                logger.error(f"Webhook error: {e}")
-                self.send_response(200)  # Always 200 for Telegram
-                self.end_headers()
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-# ──────────────────────────────────────────────────────────────
 # Main
-if __name__ == '__main__':
+def main():
     if not TELEGRAM_TOKEN or not YOU_API_KEY:
         logger.error("❌ Missing environment variables!")
-        exit(1)
+        return
     
     init_db()
-    port = int(os.getenv('PORT', 8000))
     
-    logger.info(f"🚀 Starting webhook server on port {port}")
-    server = HTTPServer(('0.0.0.0', port), WebhookHandler)
-    server.serve_forever()
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("news", news))
+    app.add_handler(CommandHandler("status", status))
+    
+    logger.info("🚀 Bot started with polling")
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
