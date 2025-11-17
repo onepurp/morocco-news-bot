@@ -1,6 +1,7 @@
 import os
 import logging
 import requests
+import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -81,7 +82,7 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(formatted_news, parse_mode="Markdown")
 
 # --- Scheduled Job ---
-async def daily_news_job(context: ContextTypes.DEFAULT_TYPE):
+async def daily_news_job(context: Application):
     """The job that is run on a schedule to send the daily news."""
     logger.info("Running daily news job...")
     news_items = await fetch_moroccan_news()
@@ -90,20 +91,20 @@ async def daily_news_job(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=ADMIN_USER_ID, text=formatted_news, parse_mode="Markdown")
 
 # --- Main Application ---
-def main():
+async def main():
     """Starts the bot."""
+    # --- Scheduler ---
+    scheduler = AsyncIOScheduler()
+    scheduler.start()
+
+    # --- Bot Application ---
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     # --- Command Handlers ---
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("getnews", get_news))
 
-    # --- Scheduler ---
-    scheduler = AsyncIOScheduler()
-    
-    # --- FIX ---
-    # The 'context' argument for daily_news_job is passed via kwargs.
-    # This prevents it from being misinterpreted as a trigger argument.
+    # --- Add scheduled job ---
     scheduler.add_job(
         daily_news_job,
         "cron",
@@ -111,10 +112,11 @@ def main():
         minute=int(SCHEDULE_TIME.split(':')[1]),
         kwargs={"context": application}
     )
-    scheduler.start()
 
     # --- Start the Bot ---
-    application.run_polling()
+    # This will run the bot indefinitely until it is stopped.
+    await application.run_polling()
 
 if __name__ == "__main__":
-    main()
+    # This creates an asyncio event loop and runs the main coroutine.
+    asyncio.run(main())
