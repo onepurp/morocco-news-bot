@@ -7,8 +7,10 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 # Configuration
 RATE_LIMIT_HOURS = 24
 DB_FILENAME = 'users.db'
+
+# STRIP whitespace from keys
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '').strip()
-YOU_API_KEY = os.getenv('YOU_API_KEY', '').strip()  # ← STRIP removes \n
+YOU_API_KEY = os.getenv('YOU_API_KEY', '').strip()
 ADMIN_ID = os.getenv('ADMIN_ID', '').strip()
 
 logging.basicConfig(level=logging.INFO)
@@ -85,7 +87,7 @@ class NewsFetcher:
             filtered = []
             for item in items:
                 title = item.get("title", "")
-                if any(kw in title.lower() for kw in ["مغرب", "morocco"]):
+                if any(kw in title.lower() for kw in ["مغرب", "maroc"]):
                     filtered.append({
                         "title": title,
                         "desc": item.get("description", "")[:150] + "...",
@@ -98,11 +100,12 @@ class NewsFetcher:
             
         except Exception as e:
             logger.error(f"❌ API Error: {e}")
+            logger.error(f"❌ Response: {resp.text if 'resp' in locals() else 'None'}")
             return []
 
     def format(self, items):
         if not items:
-            return "📰 لا توجد أخبار."
+            return "📰 لا توجد أخبار.\n\n💡 تحقق من API Key في Railway Variables"
         
         msg = f"📰 *أخبار المغرب - {datetime.now().strftime('%Y-%m-%d')}*\n\n"
         for i, item in enumerate(items, 1):
