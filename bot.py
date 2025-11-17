@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 RATE_LIMIT_HOURS = 24
 DB_FILENAME = 'users.db'
 
-# STRIP whitespace from keys
+# STRIP whitespace
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '').strip()
 YOU_API_KEY = os.getenv('YOU_API_KEY', '').strip()
 ADMIN_ID = os.getenv('ADMIN_ID', '').strip()
@@ -25,7 +25,6 @@ def init_db():
                  (user_id TEXT PRIMARY KEY, last_request TIMESTAMP)''')
     conn.commit()
     conn.close()
-    logger.info("✅ Database ready")
 
 def check_limit(user_id: str):
     if ADMIN_ID and user_id == ADMIN_ID:
@@ -70,19 +69,16 @@ class NewsFetcher:
     
     def fetch(self):
         try:
-            logger.info("🌐 Calling API...")
             resp = requests.get(
                 "https://api.ydc-index.io/v1/search",
                 headers={"X-API-Key": self.api_key},
-                params={"query": "المغرب", "count": 10, "freshness": "day"},
+                params={"query": "أخبار المغرب", "count": 10, "freshness": "day"},
                 timeout=30
             )
             resp.raise_for_status()
             
             data = resp.json()
             items = data.get("results", {}).get("news", []) or data.get("results", {}).get("web", [])
-            
-            logger.info(f"📦 Got {len(items)} items total")
             
             filtered = []
             for item in items:
@@ -94,13 +90,10 @@ class NewsFetcher:
                         "url": item.get("url", ""),
                         "source": item.get("source_name", "مصادر"),
                     })
-            
-            logger.info(f"🎯 Filtered to {len(filtered)} items")
             return filtered[:5]
             
         except Exception as e:
             logger.error(f"❌ API Error: {e}")
-            logger.error(f"❌ Response: {resp.text if 'resp' in locals() else 'None'}")
             return []
 
     def format(self, items):
