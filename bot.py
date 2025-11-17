@@ -36,22 +36,31 @@ def admin_only(func):
 
 # --- You.com API Integration ---
 async def fetch_moroccan_news():
-    """Fetches Moroccan news from the You.com API using the Chat endpoint."""
-    headers = {"X-API-Key": YOU_API_KEY}
-    # --- FIX: The API requires a POST request with a JSON payload ---
+    """Fetches Moroccan news from the You.com API using the Research endpoint."""
+    # --- FIX: Corrected the API endpoint URL based on official documentation ---
+    url = "https://chat-api.you.com/research"
+    
+    headers = {
+        "X-API-Key": YOU_API_KEY,
+        "Content-Type": "application/json"
+    }
+    
     payload = {
-        "query": "أخبار المغرب اليوم",
+        "query": "أهم أخبار المغرب اليوم",
         "country": "MA"
     }
+    
     try:
-        # --- FIX: Changed to POST and updated the URL to the correct Chat API endpoint ---
-        response = requests.post("https://api.you.com/v1/chat", headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()
-        # --- FIX: The news results are in the "searchResults" key ---
-        return data.get("searchResults", {}).get("results", [])
+        # The news results are in the "search_results" key
+        return data.get("search_results", [])
     except requests.exceptions.RequestException as e:
         logger.error(f"Error fetching news from You.com API: {e}")
+        return None
+    except KeyError:
+        logger.error(f"Unexpected API response format: {data}")
         return None
 
 # --- News Formatting ---
@@ -61,8 +70,9 @@ def format_news(news_items):
         return "No news found."
 
     formatted_news = " إليك أهم الأخبار المغربية لهذا اليوم:\n\n"
-    for item in news_items:
-        title = item.get("title", "No Title")
+    # Limit to the top 8 stories
+    for item in news_items[:8]:
+        title = item.get("name", "No Title") # API uses 'name' for title
         snippet = item.get("snippet", "No Snippet")
         url = item.get("url", "#")
         formatted_news += f"📰 *{title}*\n"
