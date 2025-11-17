@@ -1,52 +1,77 @@
-import asyncio, logging, os, re, sqlite3, requests
+import asyncio, os, logging, json, sqlite3, requests
 from datetime import datetime, timedelta
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
+# ──────────────────────────────────────────────────────────────
+# Configuration
 RATE_LIMIT_HOURS = 24
 DB_FILENAME = 'users.db'
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+YOU_API_KEY = os.getenv('YOU_API_KEY')
 
-# Initialize DB
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ──────────────────────────────────────────────────────────────
+# Database
 def init_db():
-    conn = sqlite3.connect(DB_FILENAME)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users 
-                 (user_id TEXT PRIMARY KEY, last_request TEXT)''')
-    conn.commit()
-    conn.close()
+    """Initialize SQLite database"""
+    try:
+        conn = sqlite3.connect(DB_FILENAME)
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS users
+                     (user_id TEXT PRIMARY KEY, last_request TIMESTAMP)''')
+        conn.commit()
+        conn.close()
+        logger.info("✅ Database initialized")
+    except Exception as e:
+        logger.error(f"DB init error: {e}")
 
 def check_limit(user_id: str) -> tuple[bool, str]:
-    conn = sqlite3.connect(DB_FILENAME)
-    c = conn.cursor()
-    c.execute("SELECT last_request FROM users WHERE user_id = ?", (user_id,))
-    result = c.fetchone()
-    
-    if not result:
+    """Check rate limit: Returns (allowed, message)"""
+    try:
+        conn = sqlite3.connect(DB_FILENAME)
+        c = conn.cursor()
+        c.execute("SELECT last_request FROM users WHERE user_id = ?", (user_id,))
+        result = c.fetchone()
         conn.close()
-        return True, ""
-    
-    last = datetime.fromisoformat(result[0])
-    next_allowed = last + timedelta(hours=RATE_LIMIT_HOURS)
-    now = datetime.now()
-    
-    if now >= next_allowed:
-        conn.close()
-        return True, ""
-    
-    remaining = next_allowed - now
-    hours = remaining.seconds // 3600
-    minutes = (remaining.seconds % 3600) // 60
-    conn.close()
-    return False, f"⏳ انتظر {hours} ساعة و {minutes} دقيقة"
+        
+        if not result:
+            return True, ""
+        
+        last_req = datetime.fromisoformat(result[0])
+        next_allowed = last_req + timedelta(hours=RATE_LIMIT_HOURS)
+        now = datetime.now()
+        
+        if now >= next_allowed:
+            return True, ""
+        
+        remaining = next_allowed - now
+        hours = remaining.seconds // 3600
+        minutes = (remaining.seconds % 3600) // 60
+        
+        return False, f"⏳ انتظر {hours} ساعة و {minutes} دقيقة"
+        
+    except Exception as e:
+        logger.error(f"DB error: {e}")
+        return True, ""  # Allow on error
 
 def set_limit(user_id: str):
-    conn = sqlite3.connect(DB_FILENAME)
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO users VALUES (?, ?)", 
-              (user_id, datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
+    """Update user's last request timestamp"""
+    try:
+        conn = sqlite3.connect(DB_FILENAME)
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO users VALUES (?, ?)", 
+                  (user_id, datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error updating timestamp: {e}")
 
+# ──────────────────────────────────────────────────────────────
+# News Fetcher
 class NewsFetcher:
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -60,10 +85,11 @@ class NewsFetcher:
                 timeout=30
             )
             resp.raise_for_status()
+            
             items = []
             for item in resp.json().get("results", {}).get("news", []):
                 title = item.get("title", "")
-                if any(kw in title.lower() for kw in ["مغرب", "morocco"]):
+                if any(kw in title.lower() for kw in ["مغرب", "maroc", "morocco"]):
                     items.append({
                         "title": title,
                         "desc": item.get("description", "")[:180] + "...",
@@ -72,22 +98,29 @@ class NewsFetcher:
                         "time": item.get("page_age", "")[:10]
                     })
             return items[:5]
-        except:
+        except Exception as e:
+            logger.error(f"News fetch error: {e}")
             return []
     
     def format(self, items):
         if not items:
-            return "📰 لا توجد أخبار مهمة."
+            return "📰 لا توجد أخبار مهمة اليوم."
         
         msg = f"📰 *أهم أخبار المغرب*\n{datetime.now().strftime('%Y-%m-%d')}\n\n"
         for i, item in enumerate(items, 1):
-            msg += f"*{i}. {item['title']}*\n📝 {item['desc']}\n🔗 [اقرأ]({item['url']})\n📍 {item['source']}\n\n"
-        return msg.strip()
+            msg += f"*{i}. {item['title']}*\n"
+            msg += f"📝 {item['desc']}\n"
+            msg += f"🔗 [اقرأ المزيد]({item['url']})\n"
+            msg += f"📍 {item['source']} | {item['time']}\n\n"
+        msg += f"⏰ آخر تحديث: {datetime.now().strftime('%H:%M')}"
+        return msg
 
+# ──────────────────────────────────────────────────────────────
 # Commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"👋 *أهلاً بك!*\n\n📊 مرة واحدة كل {RATE_LIMIT_HOURS} ساعة.\n\n/news - 📰 الأخبار\n/status - ⏰ الانتظار",
+        f"👋 *أهلاً!*\n\n📊 مرة واحدة كل {RATE_LIMIT_HOURS} ساعة.\n\n"
+        "/news - 📰 الأخبار\n/status - ⏰ الانتظار",
         parse_mode='Markdown'
     )
 
@@ -101,7 +134,7 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("⏳ جاري جلب الأخبار...")
     
-    fetcher = NewsFetcher(os.getenv('YOU_API_KEY'))
+    fetcher = NewsFetcher(YOU_API_KEY)
     items = fetcher.fetch()
     
     await update.message.reply_text(
@@ -112,40 +145,69 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     set_limit(user_id)
     next_time = datetime.now() + timedelta(hours=RATE_LIMIT_HOURS)
-    await update.message.reply_text(f"✅ تم!\n⏰ المرة القادمة: {next_time.strftime('%Y-%m-%d %H:%M')}")
+    await update.message.reply_text(f"✅ تم!\n⏰ القادمة: {next_time.strftime('%Y-%m-%d %H:%M')}")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     allowed, msg = check_limit(user_id)
     await update.message.reply_text("✅ يمكنك الآن!" if allowed else msg)
 
-# Webhook handler
-app = None
+# ──────────────────────────────────────────────────────────────
+# Webhook Server
+class WebhookHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        logger.info(f"{self.address_string()} - {format%args}")
 
-async def process_update(update_data):
-    global app
-    if not app:
-        app = Application.builder().token(os.getenv('TELEGRAM_TOKEN')).build()
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(CommandHandler("news", news))
-        app.add_handler(CommandHandler("status", status))
-        await app.initialize()
-    
-    update = Update.de_json(update_data, app.bot)
-    await app.process_update(update)
+    def do_GET(self):
+        # Railway health check - MUST return 200 on /
+        if self.path == '/':
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'OK')
+        else:
+            self.send_response(404)
+            self.end_headers()
 
-def handler(event, context):
-    if event['httpMethod'] != 'POST':
-        return {'statusCode': 405}
-    
-    try:
-        asyncio.run(process_update(json.loads(event['body'])))
-        return {'statusCode': 200, 'body': 'OK'}
-    except:
-        return {'statusCode': 200, 'body': 'OK'}
+    def do_POST(self):
+        # Telegram webhook endpoint
+        if self.path == '/webhook':
+            try:
+                length = int(self.headers['Content-Length'])
+                data = json.loads(self.rfile.read(length))
+                
+                async def process():
+                    application = Application.builder().token(TELEGRAM_TOKEN).build()
+                    application.add_handler(CommandHandler("start", start))
+                    application.add_handler(CommandHandler("news", news))
+                    application.add_handler(CommandHandler("status", status))
+                    await application.initialize()
+                    update = Update.de_json(data, application.bot)
+                    await application.process_update(update)
+                    await application.shutdown()
+                
+                asyncio.run(process())
+                
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'OK')
+            except Exception as e:
+                logger.error(f"Webhook error: {e}")
+                self.send_response(200)  # Always 200 for Telegram
+                self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
 
-# Railway health check
+# ──────────────────────────────────────────────────────────────
+# Main
 if __name__ == '__main__':
+    if not TELEGRAM_TOKEN or not YOU_API_KEY:
+        logger.error("❌ Missing environment variables!")
+        exit(1)
+    
     init_db()
-    # Railway will call the handler function via webhook
-    print("Bot ready for webhooks")
+    port = int(os.getenv('PORT', 8000))
+    
+    logger.info(f"🚀 Starting webhook server on port {port}")
+    server = HTTPServer(('0.0.0.0', port), WebhookHandler)
+    server.serve_forever()
